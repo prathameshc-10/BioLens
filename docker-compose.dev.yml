@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  # Development overrides for backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    volumes:
+      - ./backend:/app
+    environment:
+      - DEBUG=true
+      - RELOAD=true
+    command: ["poetry", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  # Development overrides for BioBERT service
+  biobert-service:
+    volumes:
+      - ./ml-services/biobert-service:/app
+    command: ["poetry", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]
+
+  # Development overrides for Image Analysis service
+  image-analysis-service:
+    volumes:
+      - ./ml-services/image-analysis-service:/app
+    command: ["poetry", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8002", "--reload"]
+
+  # Development overrides for frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+    command: ["npm", "run", "dev"]

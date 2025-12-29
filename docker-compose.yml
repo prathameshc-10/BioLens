@@ -1,0 +1,105 @@
+version: '3.8'
+
+services:
+  # Redis for session management and caching
+  redis:
+    image: redis:7-alpine
+    container_name: biolens-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Backend FastAPI service
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: biolens-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DEBUG=true
+    volumes:
+      - ./backend/app:/app/app
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # BioBERT ML service
+  biobert-service:
+    build:
+      context: ./ml-services/biobert-service
+      dockerfile: Dockerfile
+    container_name: biolens-biobert
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./ml-services/biobert-service/app:/app/app
+      - biobert_models:/app/models
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Image Analysis ML service
+  image-analysis-service:
+    build:
+      context: ./ml-services/image-analysis-service
+      dockerfile: Dockerfile
+    container_name: biolens-image-analysis
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./ml-services/image-analysis-service/app:/app/app
+      - image_models:/app/models
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Frontend Next.js service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: biolens-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    volumes:
+      - ./frontend/src:/app/src
+    depends_on:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  redis_data:
+    driver: local
+  biobert_models:
+    driver: local
+  image_models:
+    driver: local
+
+networks:
+  default:
+    name: biolens-network
