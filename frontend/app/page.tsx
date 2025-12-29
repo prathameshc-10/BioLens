@@ -8,7 +8,16 @@ import { Button } from "@/components/ui/button"
 import { Upload, AlertCircle, CheckCircle2, Loader2, Brain, Stethoscope, Shield, Zap, Activity } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { SymptomInput } from "@/components/symptom-input"
-import { analyzeSkinCondition, formatAnalysisForDisplay, type AnalysisResult } from "@/lib/biomedclip-api"
+import { AnalysisPieChart } from "@/components/analysis-pie-chart"
+import { 
+  uploadImage, 
+  analyzeSkinCondition, 
+  cleanupImage, 
+  formatAnalysisForDisplay, 
+  validateImageFile,
+  generateSessionId,
+  type AnalysisResult 
+} from "@/lib/api-client"
 
 export default function BioLensHome() {
   const [file, setFile] = useState<File | null>(null)
@@ -18,6 +27,9 @@ export default function BioLensHome() {
   const [symptoms, setSymptoms] = useState<string>("")
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null)
   const [formattedResult, setFormattedResult] = useState<string | null>(null)
+  const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null)
+  const [uploadedPublicId, setUploadedPublicId] = useState<string | null>(null)
+  const [sessionId] = useState<string>(() => generateSessionId())
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -40,6 +52,13 @@ export default function BioLensHome() {
   }, [])
 
   const handleFileSelect = (selectedFile: File) => {
+    // Validate file before processing
+    const validation = validateImageFile(selectedFile)
+    if (!validation.valid) {
+      alert(validation.error)
+      return
+    }
+
     setFile(selectedFile)
     const reader = new FileReader()
     reader.onloadend = () => {
@@ -48,6 +67,8 @@ export default function BioLensHome() {
     reader.readAsDataURL(selectedFile)
     setAnalysisResult(null)
     setFormattedResult(null)
+    setUploadedImageUrl(null)
+    setUploadedPublicId(null)
   }
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -63,14 +84,38 @@ export default function BioLensHome() {
     setIsProcessing(true)
 
     try {
-      // Use the new BiomedCLIP API
-      const result = await analyzeSkinCondition(file, symptoms)
-      setAnalysisResult(result)
-      setFormattedResult(formatAnalysisForDisplay(result))
+      // Step 1: Upload image to Cloudinary
+      console.log('📤 Uploading image to Cloudinary...')
+      const uploadResponse = await uploadImage(file)
+      
+      if (!uploadResponse.success || !uploadResponse.imageUrl) {
+        throw new Error(uploadResponse.error || 'Failed to upload image')
+      }
+
+      console.log('✅ Image uploaded successfully:', uploadResponse.imageUrl)
+      setUploadedImageUrl(uploadResponse.imageUrl)
+      setUploadedPublicId(uploadResponse.publicId || null)
+
+      // Step 2: Analyze the uploaded image
+      console.log('🔬 Starting analysis...')
+      const analysisResponse = await analyzeSkinCondition(
+        uploadResponse.imageUrl, 
+        symptoms, 
+        sessionId
+      )
+      
+      if (analysisResponse.analysis) {
+        setAnalysisResult(analysisResponse.analysis)
+        setFormattedResult(formatAnalysisForDisplay(analysisResponse.analysis))
+        console.log('✅ Analysis completed successfully')
+      } else {
+        throw new Error(analysisResponse.error || 'Analysis failed')
+      }
+
     } catch (error) {
-      console.error('Analysis failed:', error)
+      console.error('❌ Analysis failed:', error)
       setFormattedResult(
-        "❌ **Analysis Failed**\n\nWe encountered an error while analyzing your image. This could be due to:\n\n• Network connectivity issues\n• Server temporarily unavailable\n• Image format not supported\n\n**What to do next:**\n• Check your internet connection\n• Try uploading a different image\n• Wait a few minutes and try again\n• If the problem persists, consult a healthcare professional\n\n**⚠️ Important:** If you have urgent health concerns, please contact a healthcare provider immediately."
+        "❌ **Analysis Failed**\n\nWe encountered an error while analyzing your image. This could be due to:\n\n• Network connectivity issues\n• Server temporarily unavailable\n• Image upload or processing error\n\n**What to do next:**\n• Check your internet connection\n• Try uploading a different image\n• Wait a few minutes and try again\n• If the problem persists, consult a healthcare professional\n\n**⚠️ Important:** If you have urgent health concerns, please contact a healthcare provider immediately."
       )
     } finally {
       setIsProcessing(false)
@@ -330,12 +375,7 @@ export default function BioLensHome() {
               )}
             </div>
 
-            <Alert className="mt-8 bg-primary/5 border-primary/20 shadow-sm">
-              <Shield className="h-5 w-5 text-primary" />
-              <AlertDescription className="text-sm leading-relaxed">
-                <strong className="text-primary">Privacy Guaranteed:</strong> Your images are processed securely using advanced encryption and are never stored on our servers. All analysis happens in real-time and data is immediately discarded after processing.
-              </AlertDescription>
-            </Alert>
+            
 
             {/* Symptom Input Section */}
             <div className="mt-8">
@@ -345,6 +385,12 @@ export default function BioLensHome() {
                 disabled={isProcessing}
               />
             </div>
+            <Alert className="mt-8 bg-primary/5 border-primary/20 shadow-sm">
+              <Shield className="h-5 w-5 text-primary" />
+              <AlertDescription className="text-sm leading-relaxed">
+                <strong className="text-primary">Privacy Guaranteed:</strong> Your images are processed securely using advanced encryption and are never stored on our servers. All analysis happens in real-time and data is immediately discarded after processing.
+              </AlertDescription>
+            </Alert>
           </Card>
         </section>
 
@@ -363,6 +409,13 @@ export default function BioLensHome() {
 
             {formattedResult ? (
               <>
+                {/* Pie Chart Section */}
+                {analysisResult && (
+                  <div className="mb-8">
+                    <AnalysisPieChart analysisResult={analysisResult} />
+                  </div>
+                )}
+
                 <div className="prose prose-sm max-w-none">
                   <div className="bg-gradient-to-br from-muted/30 to-muted/50 rounded-2xl p-8 whitespace-pre-line text-sm leading-relaxed border border-border/50 shadow-inner">
                     {formattedResult}
@@ -371,12 +424,25 @@ export default function BioLensHome() {
 
                 <div className="mt-8 flex flex-col sm:flex-row gap-4">
                   <Button
-                    onClick={() => {
+                    onClick={async () => {
+                      // Clean up uploaded image if it exists
+                      if (uploadedPublicId) {
+                        try {
+                          await cleanupImage(uploadedPublicId)
+                          console.log('🗑️ Image cleaned up from Cloudinary')
+                        } catch (error) {
+                          console.warn('⚠️ Failed to cleanup image:', error)
+                        }
+                      }
+                      
+                      // Reset all state
                       setFile(null)
                       setPreview(null)
                       setAnalysisResult(null)
                       setFormattedResult(null)
                       setSymptoms("")
+                      setUploadedImageUrl(null)
+                      setUploadedPublicId(null)
                     }}
                     variant="outline"
                     className="flex-1 h-12 font-semibold border-2 hover:bg-muted/50 transition-all duration-300"
@@ -384,9 +450,11 @@ export default function BioLensHome() {
                     <Upload className="mr-2 h-5 w-5" />
                     Analyze Another Image
                   </Button>
-                  <Button className="flex-1 h-12 font-semibold bg-gradient-to-r from-primary to-primary/90 hover:from-primary/90 hover:to-primary shadow-lg hover:shadow-xl transition-all duration-300">
+                  <Button className="flex-1 h-12 font-semibold bg-gradient-to-r from-primary to-primary/90 hover:from-primary/90 hover:to-primary shadow-lg hover:shadow-xl transition-all duration-300" onClick={() => window.location.href = "https://www.practo.com/search/doctors?results_type=doctor&q=%5B%7B%22word%22%3A%22Dermatologist%22%2C%22autocompleted%22%3Atrue%2C%22category%22%3A%22subspeciality%22%7D%5D&city=Bangalore"}>
+                    
                     <Stethoscope className="mr-2 h-5 w-5" />
                     Find Healthcare Providers
+                    
                   </Button>
                 </div>
               </>
