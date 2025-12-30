@@ -1,12 +1,13 @@
-# Design Document: BioLens Symptom Checker
+# Design Document: BioLens Symptom Checker with Fusion Model Architecture
 
 ## Overview
 
-BioLens is a privacy-focused healthcare accessibility application that combines natural language processing and computer vision to provide preliminary health assessments. The system processes user-submitted symptom descriptions and medical images to generate risk assessments and provide guidance toward appropriate medical care.
+BioLens is a privacy-focused healthcare accessibility application that combines advanced multimodal AI through BiomedCLIP fusion models to provide preliminary health assessments. The system processes user-submitted symptom descriptions and medical images using state-of-the-art biomedical encoders, fuses the information through a trained classifier, and generates risk assessments with guidance toward appropriate medical care.
 
-The architecture emphasizes privacy through on-device processing where feasible, ethical AI practices with comprehensive medical disclaimers, and a clean separation of concerns between frontend presentation, backend orchestration, and specialized ML processing components.
+The architecture emphasizes privacy through on-device processing where feasible, ethical AI practices with comprehensive medical disclaimers, and a clean separation of concerns between frontend presentation, backend orchestration, and specialized ML processing components. The core innovation is the fusion model that combines BiomedCLIP vision and text encoders to create unified disease predictions with improved accuracy over single-modality approaches.
 
 Key design principles:
+- **Multimodal Fusion**: Advanced BiomedCLIP-based fusion of text and image data for superior accuracy
 - **Privacy First**: Minimize data retention and maximize on-device processing
 - **Medical Ethics**: Clear disclaimers and appropriate escalation for high-risk conditions
 - **Modular Architecture**: Clean separation between UI, API, and ML components
@@ -15,7 +16,7 @@ Key design principles:
 
 ## Architecture
 
-The system follows a microservices architecture with clear separation between presentation, business logic, and ML processing layers:
+The system follows a microservices architecture with a sophisticated fusion model at its core, providing clean separation between presentation, business logic, and ML processing layers:
 
 ```mermaid
 graph TB
@@ -31,37 +32,91 @@ graph TB
         Rate[Rate Limiting]
     end
     
+    subgraph "Fusion Model Layer"
+        TextEnc[BiomedCLIP Text Encoder]
+        VisionEnc[BiomedCLIP Vision Encoder]
+        Fusion[Fusion Layer - Concat]
+        Classifier[Fusion Classifier Head]
+    end
+    
     subgraph "ML Processing Layer"
-        NLP[BioBERT Service]
-        CV[Image Analysis Service]
         LLM[Gemini Integration]
+        Risk[Risk Assessment]
     end
     
     subgraph "Data Layer"
         Cache[Redis Cache]
-        Storage[Firebase Storage]
+        Storage[Cloudinary Storage]
         Queue[Processing Queue]
     end
     
     subgraph "External Services"
         Gemini[Google Gemini API]
-        Firebase[Firebase Storage]
+        Cloudinary[Cloudinary Service]
     end
     
     UI --> API
     Chat --> API
     Upload --> API
     
-    API --> NLP
-    API --> CV
-    API --> LLM
+    API --> TextEnc
+    API --> VisionEnc
     API --> Cache
     API --> Queue
     
-    CV --> Storage
-    NLP --> Cache
+    TextEnc --> Fusion
+    VisionEnc --> Fusion
+    Fusion --> Classifier
+    Classifier --> Risk
+    Risk --> LLM
+    
     LLM --> Gemini
-    Storage --> Firebase
+    Storage --> Cloudinary
+    VisionEnc --> Storage
+```
+
+### Fusion Model Architecture Detail
+
+The core innovation is the BiomedCLIP-based fusion model:
+
+```mermaid
+graph LR
+    subgraph "Input Processing"
+        Text[Symptom Text]
+        Image[Medical Image]
+    end
+    
+    subgraph "BiomedCLIP Encoders"
+        TextEnc[Text Encoder<br/>Biomedical BERT<br/>→ 512-dim embedding]
+        VisionEnc[Vision Encoder<br/>ViT Backbone<br/>→ 512-dim embedding]
+    end
+    
+    subgraph "Fusion Layer"
+        Concat[Concatenation<br/>→ 1024-dim tensor]
+    end
+    
+    subgraph "Classifier Head"
+        FC1[Fully Connected<br/>1024 → 512]
+        ReLU[ReLU Activation]
+        Dropout[Dropout 0.3]
+        FC2[Fully Connected<br/>512 → #classes]
+        Softmax[Softmax]
+    end
+    
+    subgraph "Output"
+        Pred[Disease Predictions<br/>+ Confidence Scores]
+    end
+    
+    Text --> TextEnc
+    Image --> VisionEnc
+    TextEnc --> Concat
+    VisionEnc --> Concat
+    Concat --> FC1
+    FC1 --> ReLU
+    ReLU --> Dropout
+    Dropout --> FC2
+    FC2 --> Softmax
+    Softmax --> Pred
 ```
 
 ### Component Responsibilities
@@ -81,14 +136,19 @@ graph TB
 - Response formatting and error handling
 - Privacy controls and data retention policies
 
+**Fusion Model Components**:
+- **BiomedCLIP Text Encoder**: Biomedical text understanding with 512-dimensional embeddings
+- **BiomedCLIP Vision Encoder**: Medical image analysis with 512-dimensional embeddings
+- **Fusion Layer**: Concatenation of text and vision embeddings (1024-dimensional)
+- **Classifier Head**: Trained neural network for disease prediction from fused embeddings
+
 **ML Processing Services**:
-- **BioBERT Service**: Symptom analysis and medical entity extraction
-- **Image Analysis Service**: Computer vision for skin condition detection
+- **Risk Assessment**: Convert classifier predictions to risk levels and recommendations
 - **Gemini Integration**: Natural language response generation
 
 **Data Layer**:
 - **Redis Cache**: Session data and temporary processing results
-- **Firebase Storage**: Temporary image storage with automatic cleanup
+- **Cloudinary Storage**: Temporary image storage with automatic cleanup
 - **Processing Queue**: Asynchronous ML task management
 
 ## Components and Interfaces
@@ -106,6 +166,7 @@ interface ChatMessage {
     riskLevel?: 'low' | 'medium' | 'high';
     imageId?: string;
     analysisId?: string;
+    confidence?: number;
   };
 }
 
@@ -129,82 +190,100 @@ interface ImageUploadProps {
 
 ### Backend API Interfaces
 
-**Symptom Analysis Endpoint**:
+**Fusion Model Analysis Endpoint**:
 ```python
-class SymptomAnalysisRequest(BaseModel):
-    text: str
+class FusionAnalysisRequest(BaseModel):
+    text: Optional[str] = None
+    image_id: Optional[str] = None
     session_id: str
     context: Optional[List[str]] = None
 
-class SymptomAnalysisResponse(BaseModel):
+class FusionAnalysisResponse(BaseModel):
     analysis_id: str
-    entities: List[MedicalEntity]
-    risk_score: float
+    predictions: List[DiseasePrediction]
+    risk_level: RiskLevel
     confidence: float
     processing_time: float
+    modality: str  # 'text', 'image', 'multimodal'
 ```
 
-**Image Analysis Endpoint**:
+**Text Embedding Endpoint**:
 ```python
-class ImageAnalysisRequest(BaseModel):
-    image_id: str
+class TextEmbeddingRequest(BaseModel):
+    text: str
     session_id: str
-    metadata: Optional[Dict[str, Any]] = None
 
-class ImageAnalysisResponse(BaseModel):
-    analysis_id: str
-    conditions: List[DetectedCondition]
-    confidence_scores: Dict[str, float]
+class TextEmbeddingResponse(BaseModel):
+    embedding_id: str
+    embedding: List[float]  # 512-dimensional
     processing_time: float
 ```
 
-**Combined Assessment Endpoint**:
+**Image Embedding Endpoint**:
 ```python
-class AssessmentRequest(BaseModel):
+class ImageEmbeddingRequest(BaseModel):
+    image_id: str
     session_id: str
-    symptom_analysis_id: Optional[str] = None
-    image_analysis_id: Optional[str] = None
 
-class AssessmentResponse(BaseModel):
-    assessment_id: str
-    risk_level: RiskLevel
-    summary: str
-    recommendations: List[Recommendation]
-    disclaimers: List[str]
-    referral_suggestions: List[ReferralSuggestion]
+class ImageEmbeddingResponse(BaseModel):
+    embedding_id: str
+    embedding: List[float]  # 512-dimensional
+    processing_time: float
 ```
 
-### ML Service Interfaces
+### Fusion Model Interfaces
 
-**BioBERT Service**:
+**BiomedCLIP Text Encoder**:
 ```python
-class BioBERTProcessor:
-    def analyze_symptoms(self, text: str) -> SymptomAnalysis:
-        """Extract medical entities and assess symptom severity"""
+class BiomedCLIPTextEncoder:
+    def encode_text(self, text: str) -> np.ndarray:
+        """Generate 512-dimensional biomedical text embedding"""
         pass
     
-    def extract_entities(self, text: str) -> List[MedicalEntity]:
-        """Extract medical entities using BioBERT"""
+    def preprocess_text(self, text: str) -> str:
+        """Clean and prepare text for encoding"""
         pass
     
-    def calculate_risk_score(self, entities: List[MedicalEntity]) -> float:
-        """Calculate preliminary risk assessment"""
+    def validate_input(self, text: str) -> bool:
+        """Validate text input for processing"""
         pass
 ```
 
-**Image Analysis Service**:
+**BiomedCLIP Vision Encoder**:
 ```python
-class ImageAnalyzer:
-    def analyze_skin_condition(self, image_path: str) -> SkinAnalysis:
-        """Analyze skin conditions using CNN model"""
+class BiomedCLIPVisionEncoder:
+    def encode_image(self, image_path: str) -> np.ndarray:
+        """Generate 512-dimensional biomedical image embedding"""
         pass
     
     def preprocess_image(self, image: np.ndarray) -> np.ndarray:
         """Standardize image for model input"""
         pass
     
-    def postprocess_results(self, predictions: np.ndarray) -> List[DetectedCondition]:
-        """Convert model outputs to structured results"""
+    def validate_image(self, image_path: str) -> bool:
+        """Validate image format and size"""
+        pass
+```
+
+**Fusion Classifier**:
+```python
+class FusionClassifier:
+    def predict_multimodal(self, text_embedding: np.ndarray, 
+                          image_embedding: np.ndarray) -> DiseasePrediction:
+        """Make disease prediction from fused embeddings"""
+        pass
+    
+    def predict_text_only(self, text_embedding: np.ndarray) -> DiseasePrediction:
+        """Make prediction from text embedding only"""
+        pass
+    
+    def predict_image_only(self, image_embedding: np.ndarray) -> DiseasePrediction:
+        """Make prediction from image embedding only"""
+        pass
+    
+    def fuse_embeddings(self, text_emb: np.ndarray, 
+                       image_emb: np.ndarray) -> np.ndarray:
+        """Concatenate embeddings for fusion layer"""
         pass
 ```
 
@@ -212,26 +291,48 @@ class ImageAnalyzer:
 
 ### Core Domain Models
 
-**Medical Entity**:
+**Disease Prediction**:
 ```python
-class MedicalEntity(BaseModel):
-    text: str
-    label: str  # SYMPTOM, CONDITION, BODY_PART, SEVERITY, etc.
-    confidence: float
-    start_pos: int
-    end_pos: int
-    normalized_form: Optional[str] = None
-```
-
-**Detected Condition**:
-```python
-class DetectedCondition(BaseModel):
+class DiseasePrediction(BaseModel):
     condition_name: str
     confidence: float
     severity: str  # 'mild', 'moderate', 'severe'
     category: str  # 'dermatological', 'infectious', etc.
     description: str
     requires_attention: bool
+    prediction_source: str  # 'text', 'image', 'multimodal'
+
+class FusionPredictionResult(BaseModel):
+    predictions: List[DiseasePrediction]
+    top_prediction: DiseasePrediction
+    overall_confidence: float
+    risk_level: RiskLevel
+    modality_used: str  # 'text', 'image', 'multimodal'
+```
+
+**Embedding Models**:
+```python
+class TextEmbedding(BaseModel):
+    embedding_id: str
+    text_input: str
+    embedding_vector: List[float]  # 512-dimensional
+    created_at: datetime
+    session_id: str
+
+class ImageEmbedding(BaseModel):
+    embedding_id: str
+    image_id: str
+    embedding_vector: List[float]  # 512-dimensional
+    created_at: datetime
+    session_id: str
+
+class FusedEmbedding(BaseModel):
+    fusion_id: str
+    text_embedding_id: Optional[str] = None
+    image_embedding_id: Optional[str] = None
+    fused_vector: List[float]  # 1024-dimensional
+    created_at: datetime
+    session_id: str
 ```
 
 **Risk Assessment**:
@@ -248,6 +349,7 @@ class RiskAssessment(BaseModel):
     factors: List[str]
     confidence: float
     timestamp: datetime
+    prediction_basis: str  # 'fusion_model', 'text_only', 'image_only'
 ```
 
 **User Session**:
@@ -258,6 +360,7 @@ class UserSession(BaseModel):
     last_activity: datetime
     messages: List[ChatMessage]
     analyses: List[str]  # Analysis IDs
+    embeddings: List[str]  # Embedding IDs
     privacy_settings: PrivacySettings
     expires_at: datetime
 ```
@@ -269,15 +372,18 @@ class PrivacySettings(BaseModel):
     allow_cloud_processing: bool = True
     anonymize_data: bool = True
     delete_images_immediately: bool = True
+    encryption_required: bool = True
 ```
 
 ### Processing Models
 
-**Analysis Pipeline**:
+**Fusion Analysis Pipeline**:
 ```python
-class AnalysisPipeline(BaseModel):
+class FusionAnalysisPipeline(BaseModel):
     pipeline_id: str
     session_id: str
+    text_input: Optional[str] = None
+    image_id: Optional[str] = None
     steps: List[ProcessingStep]
     status: ProcessingStatus
     created_at: datetime
@@ -285,7 +391,7 @@ class AnalysisPipeline(BaseModel):
     error_message: Optional[str] = None
 
 class ProcessingStep(BaseModel):
-    step_name: str
+    step_name: str  # 'text_encoding', 'image_encoding', 'fusion', 'classification'
     status: ProcessingStatus
     input_data: Dict[str, Any]
     output_data: Optional[Dict[str, Any]] = None
@@ -312,220 +418,288 @@ class GeneratedResponse(BaseModel):
     referrals: List[ReferralSuggestion]
     sources: List[str]
     generated_at: datetime
+    confidence_explanation: str
 
 class Recommendation(BaseModel):
     type: str  # 'immediate_care', 'monitoring', 'lifestyle', etc.
     priority: int  # 1-5, 1 being highest
     description: str
     timeframe: Optional[str] = None
+    based_on: str  # 'fusion_prediction', 'text_analysis', 'image_analysis'
 
 class ReferralSuggestion(BaseModel):
     specialty: str  # 'dermatology', 'primary_care', 'emergency', etc.
     urgency: str  # 'immediate', 'within_week', 'routine'
     reason: str
     location_based: bool = True
+    confidence_threshold: float  # Minimum confidence for this referral
 ```
 
 ## Correctness Properties
 
 *A property is a characteristic or behavior that should hold true across all valid executions of a system—essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
 
-The following properties define the correctness requirements for the BioLens system, derived from the acceptance criteria in the requirements document. Each property is designed to be testable through property-based testing with generated inputs.
+The following properties define the correctness requirements for the BioLens fusion model system, derived from the acceptance criteria in the requirements document. Each property is designed to be testable through property-based testing with generated inputs.
 
-### Property 1: Symptom Analysis Completeness
-*For any* valid symptom text input, the BioBERT analyzer should extract at least one medical entity and generate a risk score between 0.0 and 1.0 with a confidence measure.
-**Validates: Requirements 1.1, 1.2, 1.3**
+### Property 1: BiomedCLIP Text Encoding Completeness
+*For any* valid symptom text input, the BiomedCLIP text encoder should generate a 512-dimensional embedding vector with proper normalization and consistent format.
+**Validates: Requirements 1.1**
 
-### Property 2: Input Validation and Error Handling
-*For any* invalid or malformed input (empty strings, non-medical text, unsupported formats), the system should reject the input gracefully and provide clear error messages without crashing.
+### Property 2: BiomedCLIP Vision Encoding Completeness  
+*For any* valid medical image in supported formats, the BiomedCLIP vision encoder should generate a 512-dimensional embedding vector with proper normalization and consistent format.
+**Validates: Requirements 2.3**
+
+### Property 3: Fusion Embedding Generation
+*For any* combination of valid text and image embeddings, the fusion layer should generate a 1024-dimensional concatenated embedding that preserves information from both modalities.
+**Validates: Requirements 3.1**
+
+### Property 4: Multimodal Disease Prediction
+*For any* fusion embedding, the classifier should generate disease predictions with confidence scores between 0.0 and 1.0, with the sum of all prediction confidences being properly normalized.
+**Validates: Requirements 3.2**
+
+### Property 5: Single-Modality Processing
+*For any* input containing only text or only image data, the system should process it through the appropriate single encoder and generate valid predictions without requiring the missing modality.
+**Validates: Requirements 3.7**
+
+### Property 6: Input Validation and Error Handling
+*For any* invalid input (malformed text, unsupported image formats, corrupted files), the system should reject the input gracefully with clear error messages and appropriate error codes.
 **Validates: Requirements 1.4, 2.5**
 
-### Property 3: Image Processing Pipeline Integrity
-*For any* valid medical image in supported formats (JPEG, PNG, WebP) under 10MB, the system should successfully store, queue, process, and extract visual medical features within the specified time limits.
-**Validates: Requirements 2.1, 2.2, 2.3, 2.6**
+### Property 7: Image Format and Size Validation
+*For any* uploaded file, the system should correctly validate format (JPEG, PNG, WebP) and size (≤10MB), accepting valid files and rejecting invalid ones with specific error messages.
+**Validates: Requirements 2.6**
 
-### Property 4: Multimodal Assessment Integration
-*For any* combination of text symptoms and image analysis results, the risk scorer should generate a combined assessment that incorporates both data sources and produces a coherent risk level.
-**Validates: Requirements 2.4, 3.1**
+### Property 8: Response Generation with Medical Context
+*For any* disease prediction result, the response generator should create user-friendly explanations that include appropriate medical disclaimers and emphasize the preliminary nature of AI analysis.
+**Validates: Requirements 3.3**
 
-### Property 5: Response Generation with Disclaimers
-*For any* health assessment result, the response generator should create user-friendly explanations that include appropriate medical disclaimers and emphasize the preliminary nature of AI analysis.
-**Validates: Requirements 3.2, 6.2, 6.4**
+### Property 9: Risk-Based Response Customization
+*For any* high-risk prediction result, the system should generate responses that emphasize immediate professional medical attention and include strong recommendations for professional consultation.
+**Validates: Requirements 3.4**
 
-### Property 6: Risk-Based Escalation
-*For any* assessment with high risk level, the system should emphasize immediate professional medical attention and provide strong recommendations for professional consultation.
-**Validates: Requirements 3.3, 6.3**
+### Property 10: Low-Risk Guidance with Disclaimers
+*For any* low-risk prediction result, the system should provide general guidance while maintaining comprehensive medical disclaimers about AI limitations.
+**Validates: Requirements 3.5**
 
-### Property 7: Emergency Detection and Redirection
-*For any* input containing emergency-related keywords or symptoms, the system should detect the emergency context and redirect users to appropriate emergency services.
-**Validates: Requirements 6.6**
+### Property 11: Referral Suggestion Generation
+*For any* disease prediction with sufficient confidence, the system should generate relevant doctor referral suggestions based on the detected condition category and severity.
+**Validates: Requirements 3.6**
 
-### Property 8: Data Privacy and Retention
-*For any* user session and uploaded images, the system should automatically delete temporary data within specified timeframes (24 hours for images, session end for conversation data) while maintaining proper encryption during processing.
-**Validates: Requirements 4.2, 4.3, 4.4**
-
-### Property 9: Session Context Preservation
-*For any* ongoing conversation within a session, the system should maintain context from previous exchanges and use that context to inform subsequent responses and assessments.
+### Property 12: Session Context Preservation
+*For any* ongoing conversation within a session, the system should maintain context from previous exchanges and use that context to inform subsequent responses and fusion model predictions.
 **Validates: Requirements 1.5**
 
-### Property 10: Performance and Responsiveness
-*For any* valid request under normal load conditions, the system should complete text analysis within 10 seconds and image analysis within 30 seconds while providing progress indicators.
-**Validates: Requirements 7.2, 7.3, 5.6**
+### Property 13: Secure Image Storage and Queuing
+*For any* uploaded medical image, the system should store it securely in Cloudinary with proper encryption and queue it for processing with appropriate metadata tracking.
+**Validates: Requirements 2.1, 2.2**
 
-### Property 11: System Resilience
-*For any* external service failure (Firebase, Gemini API, ML models), the system should handle the failure gracefully, provide appropriate error messages, and continue operating with degraded functionality where possible.
-**Validates: Requirements 7.4, 8.5**
+### Property 14: Embedding Preparation for Fusion
+*For any* generated text or image embedding, the system should prepare it in the correct format and dimensionality for fusion processing, ensuring compatibility with the fusion layer.
+**Validates: Requirements 1.2, 2.4**
 
-### Property 12: Transparency and User Communication
-*For any* data processing operation, the system should provide clear information about what data is being processed, where it's being processed, and include appropriate progress indicators and user-friendly language.
-**Validates: Requirements 4.6, 5.3**
+### Property 15: Data Encryption During Transmission
+*For any* cloud processing operation, the system should use encrypted data transmission to protect sensitive medical information during processing.
+**Validates: Requirements 4.2**
+
+### Property 16: Automatic Data Cleanup
+*For any* processed image and associated embeddings, the system should automatically delete them from Cloudinary storage within 24 hours of processing completion.
+**Validates: Requirements 4.3**
+
+### Property 17: Session Data Cleanup
+*For any* user session that ends, the system should clear all temporary data, conversation history, and cached embeddings associated with that session.
+**Validates: Requirements 4.4**
+
+### Property 18: Processing Transparency
+*For any* data processing operation, the system should provide clear information about what data is being processed, which models are being used, and the current processing status.
+**Validates: Requirements 4.6**
 
 ## Error Handling
 
-The system implements comprehensive error handling across all layers:
+The system implements comprehensive error handling across all layers, with special attention to fusion model processing:
 
 ### Input Validation Errors
-- **Symptom Text**: Empty strings, non-text input, excessively long input (>10,000 characters)
-- **Images**: Unsupported formats, oversized files (>10MB), corrupted files, non-image files
+- **Symptom Text**: Empty strings, non-text input, excessively long input (>10,000 characters), non-medical content
+- **Images**: Unsupported formats, oversized files (>10MB), corrupted files, non-image files, low-quality images
 - **Session Management**: Invalid session IDs, expired sessions, concurrent session conflicts
 
-### Processing Errors
-- **BioBERT Service**: Model loading failures, inference timeouts, memory constraints
-- **Image Analysis**: Preprocessing failures, model prediction errors, feature extraction issues
-- **Response Generation**: Gemini API failures, rate limiting, content filtering issues
+### Fusion Model Processing Errors
+- **BiomedCLIP Text Encoder**: Model loading failures, tokenization errors, embedding generation failures, memory constraints
+- **BiomedCLIP Vision Encoder**: Image preprocessing failures, model inference errors, embedding extraction issues, GPU memory limits
+- **Fusion Layer**: Embedding dimension mismatches, concatenation failures, invalid embedding formats
+- **Classifier Head**: Prediction failures, confidence calculation errors, output formatting issues
 
 ### External Service Errors
-- **Firebase Storage**: Upload failures, storage quota exceeded, network connectivity issues
-- **Gemini API**: Rate limiting, service unavailability, content policy violations
-- **Redis Cache**: Connection failures, memory limits, data corruption
+- **Cloudinary Storage**: Upload failures, storage quota exceeded, network connectivity issues, authentication failures
+- **Gemini API**: Rate limiting, service unavailability, content policy violations, response parsing errors
+- **Redis Cache**: Connection failures, memory limits, data corruption, serialization errors
 
 ### Error Response Strategy
 ```python
-class ErrorResponse(BaseModel):
+class FusionModelError(BaseModel):
     error_code: str
     message: str
     user_message: str  # User-friendly explanation
     retry_possible: bool
     suggested_action: Optional[str] = None
     timestamp: datetime
+    component: str  # 'text_encoder', 'vision_encoder', 'fusion', 'classifier'
+    
+class ErrorSeverity(str, Enum):
+    LOW = "low"          # Single modality failure, fallback available
+    MEDIUM = "medium"    # Fusion failure, single modality still works
+    HIGH = "high"        # Complete processing failure
+    CRITICAL = "critical" # System-wide failure
 ```
 
 **Error Escalation Levels**:
-1. **User Recoverable**: Input validation errors, format issues
-2. **System Degraded**: Single service failures with fallback options
-3. **System Critical**: Multiple service failures, data corruption
-4. **Medical Emergency**: High-risk conditions requiring immediate attention
+1. **User Recoverable**: Input validation errors, format issues, single modality failures
+2. **System Degraded**: Fusion model failures with single-modality fallback
+3. **System Critical**: Complete ML pipeline failures, external service outages
+4. **Medical Emergency**: High-risk conditions requiring immediate attention (not an error, but priority handling)
 
 ## Testing Strategy
 
-The BioLens system requires a comprehensive testing approach that combines traditional unit testing with property-based testing to ensure correctness across the wide range of possible medical inputs and scenarios.
+The BioLens fusion model system requires a comprehensive testing approach that combines traditional unit testing with property-based testing to ensure correctness across the wide range of possible medical inputs and multimodal scenarios.
 
 ### Property-Based Testing Framework
 
 **Framework Selection**: We will use Hypothesis for Python components and fast-check for TypeScript frontend components. Each property test will run a minimum of 100 iterations to ensure comprehensive input coverage.
 
 **Test Data Generation Strategy**:
-- **Medical Text Generation**: Create generators for valid symptom descriptions, medical terminology, and edge cases (empty strings, non-medical text, mixed languages)
-- **Image Generation**: Generate test images in various formats, sizes, and quality levels, including medical images and non-medical images
-- **Session Data Generation**: Create realistic user session patterns with varying conversation lengths and interaction types
-- **Error Condition Generation**: Systematically generate various failure scenarios for external services and system components
+- **Medical Text Generation**: Create generators for valid symptom descriptions, medical terminology, edge cases (empty strings, non-medical text, mixed languages), and various text lengths
+- **Medical Image Generation**: Generate test images in various formats, sizes, and quality levels, including dermatological conditions, general medical images, and non-medical images
+- **Embedding Generation**: Create synthetic embeddings with correct dimensionality for testing fusion layer functionality
+- **Session Data Generation**: Create realistic user session patterns with varying conversation lengths and multimodal interaction types
+- **Error Condition Generation**: Systematically generate various failure scenarios for fusion model components and external services
 
 ### Property Test Implementation
 
 Each correctness property will be implemented as a dedicated property-based test:
 
-**Property 1 Test**: Generate random symptom descriptions and verify BioBERT processing completeness
-- **Tag**: Feature: biolens-symptom-checker, Property 1: Symptom Analysis Completeness
+**Property 1 Test**: Generate random symptom descriptions and verify BiomedCLIP text encoding completeness
+- **Tag**: Feature: biolens-symptom-checker, Property 1: BiomedCLIP Text Encoding Completeness
 - **Generator**: Medical symptom text with varying complexity and terminology
-- **Assertion**: Valid entities extracted, risk score in [0.0, 1.0], confidence measure present
+- **Assertion**: 512-dimensional embeddings generated, proper normalization, consistent format
 
-**Property 2 Test**: Generate invalid inputs and verify graceful error handling
-- **Tag**: Feature: biolens-symptom-checker, Property 2: Input Validation and Error Handling
-- **Generator**: Invalid text inputs, malformed data, edge cases
+**Property 2 Test**: Generate medical images and verify BiomedCLIP vision encoding completeness
+- **Tag**: Feature: biolens-symptom-checker, Property 2: BiomedCLIP Vision Encoding Completeness
+- **Generator**: Medical images in supported formats and sizes
+- **Assertion**: 512-dimensional embeddings generated, proper normalization, consistent format
+
+**Property 3 Test**: Generate text and image embeddings and verify fusion layer functionality
+- **Tag**: Feature: biolens-symptom-checker, Property 3: Fusion Embedding Generation
+- **Generator**: Pairs of valid 512-dimensional embeddings
+- **Assertion**: 1024-dimensional concatenated embeddings preserve information from both modalities
+
+**Property 4 Test**: Generate fusion embeddings and verify disease prediction generation
+- **Tag**: Feature: biolens-symptom-checker, Property 4: Multimodal Disease Prediction
+- **Generator**: Valid 1024-dimensional fusion embeddings
+- **Assertion**: Disease predictions with normalized confidence scores between 0.0 and 1.0
+
+**Property 5 Test**: Generate single-modality inputs and verify processing
+- **Tag**: Feature: biolens-symptom-checker, Property 5: Single-Modality Processing
+- **Generator**: Text-only or image-only inputs
+- **Assertion**: Valid predictions generated without requiring missing modality
+
+**Property 6 Test**: Generate invalid inputs and verify error handling
+- **Tag**: Feature: biolens-symptom-checker, Property 6: Input Validation and Error Handling
+- **Generator**: Invalid text inputs, malformed images, corrupted data
 - **Assertion**: Appropriate error responses, no system crashes, clear error messages
 
-**Property 3 Test**: Generate medical images and verify complete processing pipeline
-- **Tag**: Feature: biolens-symptom-checker, Property 3: Image Processing Pipeline Integrity
-- **Generator**: Valid medical images in supported formats and sizes
-- **Assertion**: Successful storage, queuing, processing, and feature extraction
+**Property 7 Test**: Generate files of various formats and sizes for validation testing
+- **Tag**: Feature: biolens-symptom-checker, Property 7: Image Format and Size Validation
+- **Generator**: Files with different formats, sizes, and validity
+- **Assertion**: Correct acceptance/rejection with specific error messages
 
-**Property 4 Test**: Generate combinations of text and image data for multimodal assessment
-- **Tag**: Feature: biolens-symptom-checker, Property 4: Multimodal Assessment Integration
-- **Generator**: Paired symptom text and medical images
-- **Assertion**: Combined risk assessment incorporates both data sources coherently
+**Property 8 Test**: Generate prediction results and verify response generation
+- **Tag**: Feature: biolens-symptom-checker, Property 8: Response Generation with Medical Context
+- **Generator**: Various disease prediction results
+- **Assertion**: User-friendly explanations include required medical disclaimers
 
-**Property 5 Test**: Generate assessment results and verify response generation with disclaimers
-- **Tag**: Feature: biolens-symptom-checker, Property 5: Response Generation with Disclaimers
-- **Generator**: Various assessment results with different risk levels
-- **Assertion**: User-friendly explanations include required disclaimers
-
-**Property 6 Test**: Generate high-risk scenarios and verify escalation messaging
-- **Tag**: Feature: biolens-symptom-checker, Property 6: Risk-Based Escalation
-- **Generator**: High-risk medical conditions and symptoms
+**Property 9 Test**: Generate high-risk predictions and verify response customization
+- **Tag**: Feature: biolens-symptom-checker, Property 9: Risk-Based Response Customization
+- **Generator**: High-risk disease predictions
 - **Assertion**: Strong professional consultation recommendations present
 
-**Property 7 Test**: Generate emergency-related inputs and verify redirection
-- **Tag**: Feature: biolens-symptom-checker, Property 7: Emergency Detection and Redirection
-- **Generator**: Emergency keywords and critical symptoms
-- **Assertion**: Emergency services redirection triggered appropriately
+**Property 10 Test**: Generate low-risk predictions and verify guidance with disclaimers
+- **Tag**: Feature: biolens-symptom-checker, Property 10: Low-Risk Guidance with Disclaimers
+- **Generator**: Low-risk disease predictions
+- **Assertion**: General guidance with comprehensive medical disclaimers
 
-**Property 8 Test**: Generate user sessions and verify data privacy compliance
-- **Tag**: Feature: biolens-symptom-checker, Property 8: Data Privacy and Retention
-- **Generator**: User sessions with various data types and timeframes
-- **Assertion**: Automatic data deletion within specified timeframes, encryption during processing
+**Property 11 Test**: Generate predictions and verify referral suggestion generation
+- **Tag**: Feature: biolens-symptom-checker, Property 11: Referral Suggestion Generation
+- **Generator**: Disease predictions with varying confidence levels
+- **Assertion**: Relevant referral suggestions based on condition category and severity
 
-**Property 9 Test**: Generate conversation sequences and verify context preservation
-- **Tag**: Feature: biolens-symptom-checker, Property 9: Session Context Preservation
+**Property 12 Test**: Generate conversation sequences and verify context preservation
+- **Tag**: Feature: biolens-symptom-checker, Property 12: Session Context Preservation
 - **Generator**: Multi-turn conversations with varying context complexity
-- **Assertion**: Previous context influences subsequent responses appropriately
+- **Assertion**: Previous context influences subsequent fusion model predictions
 
-**Property 10 Test**: Generate requests under load and verify performance requirements
-- **Tag**: Feature: biolens-symptom-checker, Property 10: Performance and Responsiveness
-- **Generator**: Various request types with simulated load conditions
-- **Assertion**: Response times within specified limits, progress indicators shown
+**Property 13 Test**: Generate image uploads and verify secure storage and queuing
+- **Tag**: Feature: biolens-symptom-checker, Property 13: Secure Image Storage and Queuing
+- **Generator**: Various medical images for upload
+- **Assertion**: Secure Cloudinary storage with proper encryption and queuing
 
-**Property 11 Test**: Generate service failure scenarios and verify system resilience
-- **Tag**: Feature: biolens-symptom-checker, Property 11: System Resilience
-- **Generator**: Various external service failure conditions
-- **Assertion**: Graceful degradation, appropriate error handling, continued operation
+**Property 14 Test**: Generate embeddings and verify preparation for fusion
+- **Tag**: Feature: biolens-symptom-checker, Property 14: Embedding Preparation for Fusion
+- **Generator**: Text and image embeddings with various characteristics
+- **Assertion**: Correct format and dimensionality for fusion layer compatibility
 
-**Property 12 Test**: Generate processing operations and verify transparency
-- **Tag**: Feature: biolens-symptom-checker, Property 12: Transparency and User Communication
+**Property 15 Test**: Generate cloud processing operations and verify encryption
+- **Tag**: Feature: biolens-symptom-checker, Property 15: Data Encryption During Transmission
 - **Generator**: Various data processing scenarios
-- **Assertion**: Clear user communication, progress indicators, accessible language
+- **Assertion**: Encrypted transmission for all cloud operations
+
+**Property 16 Test**: Generate processed images and verify automatic cleanup
+- **Tag**: Feature: biolens-symptom-checker, Property 16: Automatic Data Cleanup
+- **Generator**: Processed images with various processing times
+- **Assertion**: Automatic deletion from Cloudinary within 24 hours
+
+**Property 17 Test**: Generate user sessions and verify session cleanup
+- **Tag**: Feature: biolens-symptom-checker, Property 17: Session Data Cleanup
+- **Generator**: User sessions with various data types and durations
+- **Assertion**: Complete cleanup of temporary data and embeddings on session end
+
+**Property 18 Test**: Generate processing operations and verify transparency
+- **Tag**: Feature: biolens-symptom-checker, Property 18: Processing Transparency
+- **Generator**: Various data processing scenarios
+- **Assertion**: Clear information about processing status and model usage
 
 ### Unit Testing Strategy
 
 **Complementary Unit Tests**: Focus on specific examples, integration points, and edge cases that complement the property-based tests:
 
-- **Medical Entity Extraction**: Test specific medical terms and their correct classification
-- **Risk Scoring Logic**: Test boundary conditions and specific risk calculation scenarios
-- **Image Preprocessing**: Test specific image transformations and format conversions
-- **API Integration**: Test specific request/response patterns with external services
-- **Session Management**: Test specific session lifecycle scenarios
-- **Error Handling**: Test specific error conditions and recovery mechanisms
+- **Fusion Model Components**: Test specific embedding concatenation scenarios and classifier edge cases
+- **BiomedCLIP Integration**: Test specific medical text and image processing examples
+- **Risk Assessment Logic**: Test boundary conditions and specific risk calculation scenarios
+- **API Integration**: Test specific request/response patterns with Cloudinary and Gemini services
+- **Session Management**: Test specific session lifecycle scenarios with multimodal data
+- **Error Handling**: Test specific error conditions and recovery mechanisms for fusion model failures
 
 ### Integration Testing
 
 **End-to-End Workflows**: Test complete user journeys from symptom input to final assessment:
-- Text-only symptom analysis workflow
-- Image-only analysis workflow  
-- Combined text and image analysis workflow
-- Emergency detection and escalation workflow
-- Privacy and data cleanup workflow
+- Text-only symptom analysis workflow through BiomedCLIP text encoder
+- Image-only analysis workflow through BiomedCLIP vision encoder
+- Combined multimodal fusion analysis workflow
+- Single-modality fallback scenarios when one modality fails
+- Privacy and data cleanup workflow for multimodal data
 
-**External Service Integration**: Test integration with Firebase Storage, Gemini API, and other external dependencies using both real services (in staging) and mocked services (in unit tests).
+**External Service Integration**: Test integration with Cloudinary Storage, Gemini API, and other external dependencies using both real services (in staging) and mocked services (in unit tests).
 
 ### Performance and Load Testing
 
-**Performance Benchmarks**: Establish baseline performance metrics for:
-- BioBERT inference time with various input lengths
-- Image processing time with different image sizes and formats
-- End-to-end response time for complete assessment workflows
-- Concurrent user capacity and resource utilization
+**Fusion Model Performance Benchmarks**: Establish baseline performance metrics for:
+- BiomedCLIP text encoding time with various input lengths
+- BiomedCLIP vision encoding time with different image sizes and formats
+- Fusion layer processing time for embedding concatenation
+- Classifier inference time for disease prediction
+- End-to-end multimodal analysis time for complete workflows
 
 **Load Testing Scenarios**: Test system behavior under various load conditions:
-- Gradual load increase to identify breaking points
-- Spike testing for sudden traffic increases
-- Sustained load testing for extended periods
-- Resource exhaustion scenarios (memory, storage, API quotas)
+- Concurrent multimodal analysis requests
+- High-volume single-modality processing
+- Fusion model memory usage under sustained load
+- Cloudinary storage and retrieval performance
+- GPU utilization for vision encoder processing
